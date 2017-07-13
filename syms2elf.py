@@ -25,17 +25,6 @@ import sys
 from ctypes    import *
 from struct    import unpack
 
-USE_R2  = False
-USE_IDA = False
-
-if "IDA_SDK_VERSION" in globals():
-    USE_IDA = True
-elif "radare2" in os.environ.get('PATH',''):
-    USE_R2  = True
-else:
-    print("ERROR: The plugin must be run in IDA or radare2")
-    sys.exit(0)
-
 SHN_UNDEF = 0
 STB_GLOBAL_FUNC = 0x12
 
@@ -708,92 +697,69 @@ def get_r2_symbols():
 
     return symbols
 
-if USE_IDA:
+from idc import *
+from idaapi import *
+from idautils import *
 
-    from idc import *
-    from idaapi import *
-    from idautils import *
+class Syms2Elf(Form):
+    def __init__(self):
+        Form.__init__(self, r"""syms2elf
+    {formChangeCb}
+    <#Output file#Output ~f~ile:{txtFile}>
+    """, {
+        'formChangeCb' : Form.FormChangeCb(self.OnFormChange),
+        'txtFile' : Form.FileInput(save=True, swidth=50)
+    })
 
-    class Syms2Elf(Form):
-        def __init__(self):
-            Form.__init__(self, r"""syms2elf
-        {formChangeCb}
-        <#Output file#Output ~f~ile:{txtFile}>
-        """, {
-            'formChangeCb' : Form.FormChangeCb(self.OnFormChange),
-            'txtFile' : Form.FileInput(save=True, swidth=50)
-        })
+        self.input_elf = GetInputFilePath()
 
-            self.input_elf = GetInputFilePath()
+    def OnFormChange(self, fid):
+        if fid == self.txtFile.id:
+            o_file = self.GetControlValue(self.txtFile)
 
-        def OnFormChange(self, fid):
-            if fid == self.txtFile.id:
-                o_file = self.GetControlValue(self.txtFile)
+            if os.path.exists(o_file):
+                s = "Output file already exists\n" \
+                    "The output file already exists. " \
+                    "Do you want to overwrite it?"
 
-                if os.path.exists(o_file):
-                    s = "Output file already exists\n" \
-                        "The output file already exists. " \
-                        "Do you want to overwrite it?"
+                if bool(AskUsingForm(s, "1")):
+                    os.remove(o_file)
+                else:
+                    self.SetControlValue(self.txtFile, '')
+        return 1
 
-                    if bool(AskUsingForm(s, "1")):
-                        os.remove(o_file)
-                    else:
-                        self.SetControlValue(self.txtFile, '')
-            return 1
+    def Show(self):
+        if not self.Compiled():
+            self.Compile()
 
-        def Show(self):
-            if not self.Compiled():
-                self.Compile()
+        if "ELF" in get_file_type_name():
+            ok = self.Execute()
+        else:
+            warning("The input file is not a ELF")
+            ok = 0
+        return ok
 
-            if "ELF" in get_file_type_name():
-                ok = self.Execute()
-            else:
-                warning("The input file is not a ELF")
-                ok = 0
-            return ok
+class Syms2Elf_t(plugin_t):
+    flags = PLUGIN_UNL
+    comment = ""
+    help = ""
+    wanted_name = PLUG_NAME
+    wanted_hotkey = ""
 
-    class Syms2Elf_t(plugin_t):
-        flags = PLUGIN_UNL
-        comment = ""
-        help = ""
-        wanted_name = PLUG_NAME
-        wanted_hotkey = ""
+    def init(self):
+        return PLUGIN_OK
 
-        def init(self):
-            return PLUGIN_OK
+    def run(self, arg=0):
+        f = Syms2Elf()
 
-        def run(self, arg=0):
-            f = Syms2Elf()
+        if f.Show():
+            symbols = get_ida_symbols()
+            output_file = f.txtFile.value
+            write_symbols(f.input_elf, output_file, symbols)
+            f.Free()
 
-            if f.Show():
-                symbols = get_ida_symbols()
-                output_file = f.txtFile.value
-                write_symbols(f.input_elf, output_file, symbols)
-                f.Free()
+    def term(self):
+        pass
 
-        def term(self):
-            pass
-
-    def PLUGIN_ENTRY():
-        return Syms2Elf_t()
-
-elif USE_R2:
-
-    import r2pipe
-    r2p = r2pipe.open()
-    log = log_r2
-
-    if len(sys.argv) < 2:
-        log("%s - %s" % (PLUG_NAME, VERSION))
-        log("Usage: $syms2elf <output file>")
-        sys.exit(0)
-
-    file_info = r2p.cmdj("ij").get("core")
-
-    if file_info['format'].lower() in ('elf','elf64'):
-        symbols = get_r2_symbols()  
-        write_symbols(file_info['file'], sys.argv[1], symbols)
-    else:
-        log("The input file is not a ELF")
-
-
+def PLUGIN_ENTRY():
+    return Syms2Elf_t()
